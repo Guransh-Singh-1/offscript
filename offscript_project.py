@@ -1,15 +1,16 @@
-import json
 import os
 import re
 import datetime
 import calendar
 import csv
+import sqlite3
 import tkinter as tk
 from tkinter import messagebox, ttk, filedialog
 import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.backends.backend_pdf import PdfPages
 
 class CalendarDialog(tk.Toplevel):
     def __init__(self, parent, initial_date=None, colors=None):
@@ -359,8 +360,8 @@ class ModernFinPulseApp:
         self.root.configure(bg="#0F172A")
         
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        self.data_file = os.path.join(script_dir, "finpulse_data.json")
-        self.users_file = os.path.join(script_dir, "finpulse_users.json")
+        self.db_file = os.path.join(script_dir, "finpulse.db")
+        self.init_db()
         
         self.current_user = None
         self.auth_mode = "login"
@@ -396,21 +397,60 @@ class ModernFinPulseApp:
         self.apply_ttk_styles()
         self.show_auth_screen()
 
-    def load_users(self):
-        if os.path.exists(self.users_file):
-            try:
-                with open(self.users_file, "r") as f:
-                    return json.load(f)
-            except Exception:
-                return {}
-        return {}
+    def init_db(self):
+        conn = sqlite3.connect(self.db_file)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                username TEXT PRIMARY KEY,
+                password TEXT NOT NULL
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT,
+                type TEXT,
+                date TEXT,
+                title TEXT,
+                category TEXT,
+                amount REAL,
+                frequency TEXT,
+                source TEXT,
+                status TEXT,
+                recurring INTEGER,
+                selected INTEGER
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS budgets (
+                username TEXT,
+                ym TEXT,
+                amount REAL,
+                PRIMARY KEY (username, ym)
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS settings (
+                username TEXT PRIMARY KEY,
+                auto_enabled INTEGER,
+                auto_day INTEGER,
+                last_exported_month TEXT
+            )
+        ''')
+        conn.commit()
+        conn.close()
 
-    def save_users(self):
+    def load_users(self):
         try:
-            with open(self.users_file, "w") as f:
-                json.dump(self.users, f, indent=4)
-        except Exception as e:
-            messagebox.showerror("Error", f"Could not save user data: {e}")
+            conn = sqlite3.connect(self.db_file)
+            cursor = conn.cursor()
+            cursor.execute("SELECT username, password FROM users")
+            rows = cursor.fetchall()
+            conn.close()
+            return {row[0]: row[1] for row in rows}
+        except Exception:
+            return {}
 
     def show_auth_screen(self):
         for widget in self.root.winfo_children():
@@ -466,8 +506,17 @@ class ModernFinPulseApp:
             if username in self.users:
                 messagebox.showerror("Registration Error", "Username already exists. Please sign in.")
                 return
-            self.users[username] = password
-            self.save_users()
+            try:
+                conn = sqlite3.connect(self.db_file)
+                cursor = conn.cursor()
+                cursor.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, password))
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                messagebox.showerror("Error", f"Could not register user: {e}")
+                return
+
+            self.users = self.load_users()
             messagebox.showinfo("Success", f"Account created successfully! Welcome to FinPulse, {username}.")
             self.current_user = username
             self.load_data()
@@ -849,7 +898,7 @@ class ModernFinPulseApp:
         action_row.pack(fill="x", padx=15, pady=(15, 0))
 
         tk.Label(action_row, text="Export Format:", font=("Segoe UI", 10, "bold"), fg=self.colors["text_primary"], bg=self.colors["card_bg"]).pack(side="left", padx=(0, 10))
-        self.exp_format_combo = ttk.Combobox(action_row, values=["CSV (.csv)", "PDF Document (.pdf)", "JSON Data (.json)"], font=("Segoe UI", 10), state="readonly", width=22)
+        self.exp_format_combo = ttk.Combobox(action_row, values=["CSV (.csv)", "PDF Document (.pdf)"], font=("Segoe UI", 10), state="readonly", width=22)
         self.exp_format_combo.pack(side="left", padx=(0, 20), ipady=4)
         self.exp_format_combo.set("CSV (.csv)")
 
@@ -1135,31 +1184,14 @@ class ModernFinPulseApp:
                 except Exception as e:
                     messagebox.showerror("Export Failed", f"Could not save CSV file: {e}")
 
-        elif "JSON" in fmt:
-            filepath = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON Files", "*.json")], title="Export Transactions as JSON")
-            if filepath:
-                try:
-                    with open(filepath, "w", encoding="utf-8") as f:
-                        json.dump(dataset, f, indent=4)
-                    messagebox.showinfo("Export Successful", f"Successfully exported {len(dataset)} records to:\n{filepath}")
-                except Exception as e:
-                    messagebox.showerror("Export Failed", f"Could not save JSON file: {e}")
-
         elif "PDF" in fmt:
             filepath = filedialog.asksaveasfilename(defaultextension=".pdf", filetypes=[("PDF Documents", "*.pdf")], title="Export Transactions as PDF")
             if filepath:
                 try:
-                    fig = Figure(figsize=(8.5, 11), facecolor="white")
-                    ax = fig.add_subplot(111)
-                    ax.axis("off")
-
-                    title_text = f"FinPulse Statement — User: {self.current_user.upper() if self.current_user else 'USER'}\nGenerated on: {datetime.date.today().strftime('%Y-%m-%d')}"
-                    ax.text(0.05, 0.95, title_text, fontsize=12, fontweight="bold", verticalalignment="top")
-
                     headers = ["Date", "Type", "Title", "Category", "Amount (₹)", "Status"]
-                    table_data = [headers]
+                    all_rows = []
                     for t in dataset:
-                        table_data.append([
+                        all_rows.append([
                             t.get("date", ""),
                             t.get("type", "Expense"),
                             t.get("title", "")[:18],
@@ -1168,13 +1200,30 @@ class ModernFinPulseApp:
                             t.get("status", "")
                         ])
 
-                    table = ax.table(cellText=table_data, loc="center", cellLoc="center")
-                    table.auto_set_font_size(False)
-                    table.set_fontsize(8)
-                    table.scale(1, 1.2)
+                    rows_per_page = 25
+                    with PdfPages(filepath) as pdf:
+                        total_pages = max(1, (len(all_rows) + rows_per_page - 1) // rows_per_page)
+                        for page_idx in range(total_pages):
+                            start_idx = page_idx * rows_per_page
+                            chunk = all_rows[start_idx:start_idx + rows_per_page]
 
-                    fig.savefig(filepath, format="pdf", bbox_inches="tight")
-                    messagebox.showinfo("Export Successful", f"Successfully generated PDF statement:\n{filepath}")
+                            fig = Figure(figsize=(8.5, 11), facecolor="white")
+                            ax = fig.add_subplot(111)
+                            ax.axis("off")
+
+                            title_text = f"FinPulse Statement — User: {self.current_user.upper() if self.current_user else 'USER'}\nGenerated on: {datetime.date.today().strftime('%Y-%m-%d')} (Page {page_idx + 1} of {total_pages})"
+                            ax.text(0.05, 0.95, title_text, fontsize=11, fontweight="bold", verticalalignment="top")
+
+                            table_data = [headers] + chunk if chunk else [headers, ["No records", "", "", "", "", ""]]
+                            table = ax.table(cellText=table_data, loc="center", cellLoc="center", bbox=[0.05, 0.1, 0.9, 0.8])
+                            table.auto_set_font_size(False)
+                            table.set_fontsize(8)
+                            table.scale(1, 1.2)
+
+                            pdf.savefig(fig, bbox_inches="tight")
+                            fig.clear()
+
+                    messagebox.showinfo("Export Successful", f"Successfully generated multi-page PDF statement:\n{filepath}")
                 except Exception as e:
                     messagebox.showerror("Export Failed", f"Could not generate PDF: {e}")
 
@@ -1297,51 +1346,100 @@ class ModernFinPulseApp:
         canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
 
     def load_data(self):
-        user_data_file = self.data_file.replace("finpulse_data.json", f"finpulse_data_{self.current_user}.json")
-        if os.path.exists(user_data_file):
-            try:
-                with open(user_data_file, "r") as f:
-                    content = json.load(f)
-                    if isinstance(content, list):
-                        self.transactions = content
-                        self.budgets = {}
-                        self.auto_export_settings = {"enabled": False, "day": 1, "last_exported_month": ""}
-                    else:
-                        self.transactions = content.get("transactions", [])
-                        self.budgets = content.get("budgets", {})
-                        self.auto_export_settings = content.get("auto_export", {"enabled": False, "day": 1, "last_exported_month": ""})
-                    for item in self.transactions:
-                        if "type" not in item:
-                            item["type"] = "Expense"
-                        if "status" not in item:
-                            item["status"] = "Pending" if item.get("category") in ["Bills & Utilities", "Utility"] else "Paid"
-                        if "frequency" not in item:
-                            item["frequency"] = "Monthly"
-                        if "recurring" not in item:
-                            item["recurring"] = item.get("frequency") != "One-Time"
-                        if "selected" not in item:
-                            item["selected"] = False
-            except Exception:
-                self.transactions = []
-                self.budgets = {}
+        try:
+            conn = sqlite3.connect(self.db_file)
+            cursor = conn.cursor()
+            
+            # Load transactions
+            cursor.execute("""
+                SELECT type, date, title, category, amount, frequency, source, status, recurring, selected 
+                FROM transactions WHERE username = ?
+            """, (self.current_user,))
+            rows = cursor.fetchall()
+            self.transactions = []
+            for r in rows:
+                self.transactions.append({
+                    "type": r[0],
+                    "date": r[1],
+                    "title": r[2],
+                    "category": r[3],
+                    "amount": r[4],
+                    "frequency": r[5],
+                    "source": r[6],
+                    "status": r[7],
+                    "recurring": bool(r[8]),
+                    "selected": bool(r[9])
+                })
+                
+            # Load budgets
+            cursor.execute("SELECT ym, amount FROM budgets WHERE username = ?", (self.current_user,))
+            budget_rows = cursor.fetchall()
+            self.budgets = {row[0]: row[1] for row in budget_rows}
+            
+            # Load settings
+            cursor.execute("SELECT auto_enabled, auto_day, last_exported_month FROM settings WHERE username = ?", (self.current_user,))
+            setting_row = cursor.fetchone()
+            if setting_row:
+                self.auto_export_settings = {
+                    "enabled": bool(setting_row[0]),
+                    "day": setting_row[1],
+                    "last_exported_month": setting_row[2] or ""
+                }
+            else:
                 self.auto_export_settings = {"enabled": False, "day": 1, "last_exported_month": ""}
-        else:
+                
+            conn.close()
+        except Exception:
             self.transactions = []
             self.budgets = {}
             self.auto_export_settings = {"enabled": False, "day": 1, "last_exported_month": ""}
 
     def save_data(self):
-        user_data_file = self.data_file.replace("finpulse_data.json", f"finpulse_data_{self.current_user}.json")
         try:
-            data_to_save = {
-                "transactions": self.transactions,
-                "budgets": self.budgets,
-                "auto_export": self.auto_export_settings
-            }
-            with open(user_data_file, "w") as f:
-                json.dump(data_to_save, f, indent=4)
+            conn = sqlite3.connect(self.db_file)
+            cursor = conn.cursor()
+            
+            # Replace transactions for this user
+            cursor.execute("DELETE FROM transactions WHERE username = ?", (self.current_user,))
+            for t in self.transactions:
+                cursor.execute("""
+                    INSERT INTO transactions (username, type, date, title, category, amount, frequency, source, status, recurring, selected)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    self.current_user,
+                    t.get("type", "Expense"),
+                    t.get("date", ""),
+                    t.get("title", ""),
+                    t.get("category", ""),
+                    t.get("amount", 0.0),
+                    t.get("frequency", "Monthly"),
+                    t.get("source", ""),
+                    t.get("status", ""),
+                    1 if t.get("recurring", True) else 0,
+                    1 if t.get("selected", False) else 0
+                ))
+                
+            # Replace budgets for this user
+            cursor.execute("DELETE FROM budgets WHERE username = ?", (self.current_user,))
+            for ym, amt in self.budgets.items():
+                cursor.execute("INSERT INTO budgets (username, ym, amount) VALUES (?, ?, ?)", (self.current_user, ym, amt))
+                
+            # Upsert settings
+            cursor.execute("DELETE FROM settings WHERE username = ?", (self.current_user,))
+            cursor.execute("""
+                INSERT INTO settings (username, auto_enabled, auto_day, last_exported_month)
+                VALUES (?, ?, ?, ?)
+            """, (
+                self.current_user,
+                1 if self.auto_export_settings.get("enabled", False) else 0,
+                self.auto_export_settings.get("day", 1),
+                self.auto_export_settings.get("last_exported_month", "")
+            ))
+            
+            conn.commit()
+            conn.close()
         except Exception as e:
-            messagebox.showerror("Error", f"Could not save file: {e}")
+            messagebox.showerror("Error", f"Could not save database: {e}")
 
     def parse_upi_sms(self):
         sms_text = self.upi_sms_entry.get().strip()
