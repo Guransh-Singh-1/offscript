@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import json
 import os
 import tkinter as tk
@@ -133,3 +134,6 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = DesktopFinanceApp(root)
     root.mainloop()
+=======
+
+>>>>>>> cef557bd0cd6ca3c2298da41ad0e8b0a700644e5
