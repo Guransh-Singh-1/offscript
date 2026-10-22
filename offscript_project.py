@@ -1,7 +1,9 @@
 import json
 import os
+import datetime
 import tkinter as tk
 from tkinter import messagebox, ttk
+from tkcalendar import DateEntry
 
 class DesktopFinanceApp:
     def __init__(self, root):
@@ -24,12 +26,16 @@ class DesktopFinanceApp:
         form_frame = tk.LabelFrame(root, text=" Add New Payment ", font=("Arial", 11, "bold"), bg="#f0f2f5", padx=15, pady=10)
         form_frame.pack(fill="x", padx=20, pady=5)
 
+        tk.Label(form_frame, text="Date (YYYY-MM-DD):", bg="#f0f2f5", anchor="w").pack(fill="x")
+        self.date_entry = DateEntry(form_frame, font=("Arial", 11), date_pattern="yyyy-mm-dd", background="darkblue", foreground="white", borderwidth=2)
+        self.date_entry.pack(fill="x", pady=3)
+
         tk.Label(form_frame, text="Transaction Title / Merchant:", bg="#f0f2f5", anchor="w").pack(fill="x")
         self.title_entry = tk.Entry(form_frame, font=("Arial", 11))
         self.title_entry.pack(fill="x", pady=3)
 
         tk.Label(form_frame, text="Category:", bg="#f0f2f5", anchor="w").pack(fill="x")
-        self.category_combobox = ttk.Combobox(form_frame, values=["Subscriptions", "Bills & Utilities", "EMIs", "UPI / Cards", "Groceries", "Other"], font=("Arial", 11), state="readonly")
+        self.category_combobox = ttk.Combobox(form_frame, values=["Subscriptions", "Bills & Utilities", "EMIs", "Groceries", "Other"], font=("Arial", 11), state="readonly")
         self.category_combobox.pack(fill="x", pady=3)
         self.category_combobox.set("Subscriptions")
 
@@ -70,9 +76,16 @@ class DesktopFinanceApp:
             messagebox.showerror("Storage Error", f"Could not save data: {e}")
 
     def add_transaction(self):
+        date_str = self.date_entry.get().strip()
         title = self.title_entry.get().strip()
         category = self.category_combobox.get()
         amount_str = self.amount_entry.get().strip()
+
+        try:
+            datetime.datetime.strptime(date_str, "%Y-%m-%d")
+        except ValueError:
+            messagebox.showerror("Error", "Invalid date format. Please use YYYY-MM-DD (e.g., 2026-06-05).")
+            return
 
         if not title:
             messagebox.showerror("Error", "Please enter a transaction title.")
@@ -86,7 +99,7 @@ class DesktopFinanceApp:
             messagebox.showerror("Error", "Please enter a valid numeric amount.")
             return
 
-        self.transactions.append({"title": title, "category": category, "amount": amount})
+        self.transactions.append({"date": date_str, "title": title, "category": category, "amount": amount})
         self.save_data()
         
         self.title_entry.delete(0, tk.END)
@@ -116,13 +129,16 @@ class DesktopFinanceApp:
             self.ledger_listbox.insert(tk.END, "No transactions recorded yet.")
         else:
             for item in self.transactions:
-                row_text = f"{item['title']:<18} | {item['category']:<15} | ₹{item['amount']:,.2f}"
+                tx_date = item.get("date", "N/A")
+                row_text = f"{tx_date} | {item['title']:<15} | {item['category']:<12} | ₹{item['amount']:,.2f}"
                 self.ledger_listbox.insert(tk.END, row_text)
 
     def update_summary(self):
         total = sum(item["amount"] for item in self.transactions)
         sub_total = sum(item["amount"] for item in self.transactions if item["category"] == "Subscriptions")
-        self.summary_label.config(text=f"Total Expenses: ₹{total:,.2f}  |  Subscriptions: ₹{sub_total:,.2f}")
+        current_month_prefix = datetime.date.today().strftime("%Y-%m")
+        monthly_total = sum(item["amount"] for item in self.transactions if item.get("date", "").startswith(current_month_prefix))
+        self.summary_label.config(text=f"Total: ₹{total:,.2f}  |  This Month: ₹{monthly_total:,.2f}\nSubscriptions: ₹{sub_total:,.2f}")
 
 if __name__ == "__main__":
     root = tk.Tk()
