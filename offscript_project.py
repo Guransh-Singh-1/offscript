@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 import json
 import os
 import tkinter as tk
@@ -11,20 +10,17 @@ class DesktopFinanceApp:
         self.root.geometry("480x680")
         self.root.config(bg="#f0f2f5")
 
-        # --- FIX: Force data file to live in the exact same folder as app.py ---
         script_dir = os.path.dirname(os.path.abspath(__file__))
         self.data_file = os.path.join(script_dir, "finpulse_data.json")
         
         self.transactions = self.load_data()
 
-        # --- Header Title ---
         title_label = tk.Label(root, text="💳 FinPulse Desktop Tracker", font=("Arial", 16, "bold"), bg="#f0f2f5", fg="#333")
         title_label.pack(pady=10)
 
         subtitle_label = tk.Label(root, text="Consolidate UPI, cards, subscriptions & bills", font=("Arial", 10), bg="#f0f2f5", fg="#666")
         subtitle_label.pack(pady=2)
 
-        # --- Input Form Frame ---
         form_frame = tk.LabelFrame(root, text=" Add New Payment ", font=("Arial", 11, "bold"), bg="#f0f2f5", padx=15, pady=10)
         form_frame.pack(fill="x", padx=20, pady=5)
 
@@ -44,12 +40,10 @@ class DesktopFinanceApp:
         save_btn = tk.Button(form_frame, text="Record Transaction", font=("Arial", 11, "bold"), bg="#238636", fg="white", activebackground="#2ea043", command=self.add_transaction)
         save_btn.pack(fill="x", pady=8)
 
-        # --- Summary Section ---
         self.summary_label = tk.Label(root, text="", font=("Arial", 10, "bold"), bg="#e1dfdd", fg="#111", padx=10, pady=6)
         self.summary_label.pack(fill="x", padx=20, pady=5)
         self.update_summary()
 
-        # --- Ledger List Box & Controls ---
         tk.Label(root, text="Transaction Ledger:", font=("Arial", 11, "bold"), bg="#f0f2f5", anchor="w").pack(fill="x", padx=20)
         
         self.ledger_listbox = tk.Listbox(root, font=("Courier", 10), height=7)
@@ -134,6 +128,3 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = DesktopFinanceApp(root)
     root.mainloop()
-=======
-
->>>>>>> cef557bd0cd6ca3c2298da41ad0e8b0a700644e5
