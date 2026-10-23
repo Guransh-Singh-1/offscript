@@ -1,3 +1,4 @@
+import sys
 import os
 import re
 import datetime
@@ -6,11 +7,23 @@ import csv
 import sqlite3
 import tkinter as tk
 from tkinter import messagebox, ttk, filedialog
+import pytesseract
+import cv2
 import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.backends.backend_pdf import PdfPages
+
+def get_tesseract_path():
+    if getattr(sys, 'frozen', False):
+        base_path = sys._MEIPASS
+        return os.path.join(base_path, 'Tesseract-OCR', 'tesseract.exe')
+    else:
+        return r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
+pytesseract.pytesseract.tesseract_cmd = get_tesseract_path()
+
 
 class CalendarDialog(tk.Toplevel):
     def __init__(self, parent, initial_date=None, colors=None):
@@ -120,6 +133,125 @@ class CalendarDialog(tk.Toplevel):
 
     def select_day(self, day):
         self.result_date = f"{self.curr_year:04d}-{self.curr_month:02d}-{day:02d}"
+        self.destroy()
+
+class ReceiptReviewDialog(tk.Toplevel):
+    def __init__(self, parent, initial_data, colors=None):
+        super().__init__(parent)
+        self.title("AI Receipt OCR — Review & Verify")
+        self.geometry("440x540")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+        self.colors = colors or {
+            "bg": "#0F172A",
+            "card_bg": "#1E293B",
+            "card_border": "#334155",
+            "text_primary": "#F8FAFC",
+            "text_secondary": "#94A3B8",
+            "accent_purple": "#A855F7",
+            "input_bg": "#0F172A"
+        }
+        self.configure(bg=self.colors["bg"])
+        
+        self.update_idletasks()
+        w, h = 440, 540
+        x = (self.winfo_screenwidth() // 2) - (w // 2)
+        y = (self.winfo_screenheight() // 2) - (h // 2)
+        self.geometry(f"{w}x{h}+{x}+{y}")
+
+        self.initial_data = initial_data
+        self.verified_data = None
+        self.build_ui()
+
+    def build_ui(self):
+        container = tk.Frame(self, bg=self.colors["card_bg"], bd=1, relief="solid", highlightbackground=self.colors["accent_purple"])
+        container.pack(fill="both", expand=True, padx=15, pady=15)
+
+        tk.Label(container, text="📷 AI OCR Scanned — Review & Verify", font=("Segoe UI", 12, "bold"), fg=self.colors["accent_purple"], bg=self.colors["card_bg"]).pack(anchor="w", padx=15, pady=(15, 5))
+        tk.Label(container, text="Please verify the extracted details before adding to your ledger:", font=("Segoe UI", 9), fg=self.colors["text_secondary"], bg=self.colors["card_bg"]).pack(anchor="w", padx=15, pady=(0, 10))
+
+        tk.Label(container, text="Payee / Merchant Name:", font=("Segoe UI", 10), fg=self.colors["text_secondary"], bg=self.colors["card_bg"]).pack(anchor="w", padx=15, pady=(2, 0))
+        self.title_entry = tk.Entry(container, font=("Segoe UI", 10), bg=self.colors["input_bg"], fg=self.colors["text_primary"], insertbackground="white")
+        self.title_entry.pack(fill="x", padx=15, pady=3, ipady=4)
+        self.title_entry.insert(0, self.initial_data.get("title", ""))
+
+        tk.Label(container, text="Amount in ₹:", font=("Segoe UI", 10), fg=self.colors["text_secondary"], bg=self.colors["card_bg"]).pack(anchor="w", padx=15, pady=(4, 0))
+        self.amount_entry = tk.Entry(container, font=("Segoe UI", 10), bg=self.colors["input_bg"], fg=self.colors["text_primary"], insertbackground="white")
+        self.amount_entry.pack(fill="x", padx=15, pady=3, ipady=4)
+        self.amount_entry.insert(0, str(self.initial_data.get("amount", "")))
+
+        tk.Label(container, text="Date (yyyy-mm-dd):", font=("Segoe UI", 10), fg=self.colors["text_secondary"], bg=self.colors["card_bg"]).pack(anchor="w", padx=15, pady=(4, 0))
+        date_frame = tk.Frame(container, bg=self.colors["card_bg"])
+        date_frame.pack(fill="x", padx=15, pady=3)
+        self.date_entry = tk.Entry(date_frame, font=("Segoe UI", 10), bg=self.colors["input_bg"], fg=self.colors["text_primary"], insertbackground="white")
+        self.date_entry.pack(side="left", fill="x", expand=True, ipady=4)
+        self.date_entry.insert(0, self.initial_data.get("date", datetime.date.today().strftime("%Y-%m-%d")))
+        cal_btn = tk.Button(date_frame, text="📅", font=("Segoe UI", 8), bg=self.colors["accent_purple"], fg="white", bd=0, cursor="hand2", command=self.open_calendar)
+        cal_btn.pack(side="right", padx=(5, 0), ipady=3, ipadx=5)
+
+        tk.Label(container, text="Category:", font=("Segoe UI", 10), fg=self.colors["text_secondary"], bg=self.colors["card_bg"]).pack(anchor="w", padx=15, pady=(4, 0))
+        self.category_combobox = ttk.Combobox(container, values=["Subscription", "EMI", "Utility", "Food & Dining", "Groceries", "Transport", "Salary", "Freelance", "Investment", "Other"], font=("Segoe UI", 10), state="readonly")
+        self.category_combobox.pack(fill="x", padx=15, pady=3, ipady=3)
+        self.category_combobox.set(self.initial_data.get("category", "Other"))
+
+        tk.Label(container, text="Payment Method & Frequency:", font=("Segoe UI", 10), fg=self.colors["text_secondary"], bg=self.colors["card_bg"]).pack(anchor="w", padx=15, pady=(4, 0))
+        row_freq = tk.Frame(container, bg=self.colors["card_bg"])
+        row_freq.pack(fill="x", padx=15, pady=3)
+        self.method_combobox = ttk.Combobox(row_freq, values=["UPI Autopay", "Card Autopay", "Bank Standing Instruction", "Cash"], font=("Segoe UI", 10), state="readonly")
+        self.method_combobox.pack(side="left", fill="x", expand=True, padx=(0, 5), ipady=3)
+        self.method_combobox.set("Card Autopay")
+
+        self.frequency_combobox = ttk.Combobox(row_freq, values=["Monthly", "Annually", "One-Time"], font=("Segoe UI", 10), state="readonly")
+        self.frequency_combobox.pack(side="left", fill="x", expand=True, padx=(5, 0), ipady=3)
+        self.frequency_combobox.set("One-Time")
+
+        btn_frame = tk.Frame(container, bg=self.colors["card_bg"])
+        btn_frame.pack(fill="x", padx=15, pady=(20, 10))
+
+        confirm_btn = tk.Button(btn_frame, text="✅ Confirm & Save to Ledger", font=("Segoe UI", 11, "bold"), bg=self.colors["accent_purple"], fg="white", bd=0, cursor="hand2", command=self.confirm)
+        confirm_btn.pack(side="left", fill="x", expand=True, padx=(0, 5), ipady=8)
+
+        cancel_btn = tk.Button(btn_frame, text="Discard", font=("Segoe UI", 11), bg=self.colors["card_border"], fg="white", bd=0, cursor="hand2", command=self.destroy)
+        cancel_btn.pack(side="right", fill="x", expand=True, padx=(5, 0), ipady=8)
+
+    def open_calendar(self):
+        dialog = CalendarDialog(self, initial_date=self.date_entry.get().strip(), colors=self.colors)
+        self.wait_window(dialog)
+        if dialog.result_date:
+            self.date_entry.delete(0, tk.END)
+            self.date_entry.insert(0, dialog.result_date)
+
+    def confirm(self):
+        title = self.title_entry.get().strip()
+        amount_str = self.amount_entry.get().strip()
+        date_str = self.date_entry.get().strip()
+        category = self.category_combobox.get()
+        method = self.method_combobox.get()
+        frequency = self.frequency_combobox.get()
+
+        if not title:
+            messagebox.showerror("Error", "Please enter a merchant name.")
+            return
+        try:
+            amount = float(amount_str)
+            if amount <= 0: raise ValueError
+        except ValueError:
+            messagebox.showerror("Error", "Please enter a valid numeric amount.")
+            return
+
+        self.verified_data = {
+            "type": "Expense",
+            "date": date_str,
+            "title": title,
+            "category": category,
+            "amount": amount,
+            "frequency": frequency,
+            "source": method,
+            "status": "Paid",
+            "recurring": frequency != "One-Time",
+            "selected": False
+        }
         self.destroy()
 
 class EditTransactionDialog(tk.Toplevel):
@@ -585,6 +717,7 @@ class ModernFinPulseApp:
             ("🏠  Home", "Home"),
             ("📊  Visual Analytics & Budget", "Visual Analytics & Budget"),
             ("💳  All Transaction / filtering", "All Transaction / filtering"),
+            ("🤖  AI Financial Copilot", "AI Financial Copilot"),
             ("📥  Export Data", "Export Data")
         ]
 
@@ -597,9 +730,8 @@ class ModernFinPulseApp:
 
         pro_card = tk.Frame(bottom_sidebar, bg="#111827", highlightbackground="#374151", highlightthickness=1, padx=14, pady=12)
         pro_card.pack(fill="x", pady=(0, 20))
-        tk.Label(pro_card, text="⭐ Upgrade to Pro", font=("Segoe UI", 10, "bold"), fg=self.colors["accent_yellow"], bg="#111827").pack(anchor="w")
-        tk.Label(pro_card, text="Unlock advanced AI limits & unlimited alerts.", font=("Segoe UI", 9), fg=self.colors["text_secondary"], bg="#111827", wraplength=200, justify="left").pack(anchor="w", pady=(3, 10))
-        tk.Button(pro_card, text="Upgrade Now", font=("Segoe UI", 9, "bold"), bg=self.colors["accent_yellow"], fg="#0F172A", bd=0, cursor="hand2", padx=10, pady=6).pack(fill="x")
+        tk.Label(pro_card, text="⭐ Pro AI Enabled", font=("Segoe UI", 10, "bold"), fg=self.colors["accent_yellow"], bg="#111827").pack(anchor="w")
+        tk.Label(pro_card, text="Human-in-the-Loop OCR & Copilot Active.", font=("Segoe UI", 9), fg=self.colors["text_secondary"], bg="#111827", wraplength=200, justify="left").pack(anchor="w", pady=(3, 10))
 
         user_card = tk.Frame(bottom_sidebar, bg=self.colors["sidebar_bg"])
         user_card.pack(fill="x")
@@ -638,6 +770,8 @@ class ModernFinPulseApp:
             self.build_visual_analytics_page()
         elif page_key == "All Transaction / filtering":
             self.build_transaction_filtering_page()
+        elif page_key == "AI Financial Copilot":
+            self.build_ai_copilot_page()
         elif page_key == "Export Data":
             self.build_export_page()
 
@@ -679,7 +813,7 @@ class ModernFinPulseApp:
         inputs_frame.columnconfigure(1, weight=1)
         inputs_frame.rowconfigure(0, weight=1)
 
-        upi_card = tk.LabelFrame(inputs_frame, text=" Smart Bank / UPI SMS Ingestion ", font=("Segoe UI", 12, "bold"),
+        upi_card = tk.LabelFrame(inputs_frame, text=" Smart Bank / UPI SMS & AI Vision Ingestion ", font=("Segoe UI", 12, "bold"),
                                  bg=self.colors["card_bg"], fg=self.colors["accent_blue"],
                                  bd=1, relief="solid", highlightbackground=self.colors["card_border"])
         upi_card.grid(row=0, column=0, sticky="nsew", padx=(0, 10), pady=0)
@@ -701,10 +835,18 @@ class ModernFinPulseApp:
         self.upi_sms_entry.pack(fill="x", padx=15, pady=8, ipady=10)
         self.upi_sms_entry.insert(0, "A/c XX1234 bill generated for INR 1,450.00 on 2026-10-22 from BESCOM Utility due soon")
 
-        parse_btn = tk.Button(upi_card, text="Scan & Add Transaction", font=("Segoe UI", 12, "bold"),
+        btn_box = tk.Frame(upi_card, bg=self.colors["card_bg"])
+        btn_box.pack(fill="x", padx=15, pady=(15, 15))
+
+        parse_btn = tk.Button(btn_box, text="Scan & Add SMS", font=("Segoe UI", 11, "bold"),
                               bg=self.colors["accent_blue"], fg="#0F172A", activebackground="#0284C7",
                               bd=0, cursor="hand2", command=self.parse_upi_sms)
-        parse_btn.pack(fill="x", padx=15, pady=(20, 15), ipady=12)
+        parse_btn.pack(side="left", fill="x", expand=True, padx=(0, 5), ipady=10)
+
+        ai_vision_btn = tk.Button(btn_box, text="📷 AI Receipt OCR", font=("Segoe UI", 11, "bold"),
+                                  bg=self.colors["accent_purple"], fg="white", activebackground="#9333EA",
+                                  bd=0, cursor="hand2", command=self.scan_ai_receipt)
+        ai_vision_btn.pack(side="right", fill="x", expand=True, padx=(5, 0), ipady=10)
 
         self.manual_card = tk.LabelFrame(inputs_frame, text=" Add Financial Entry Manually ", font=("Segoe UI", 12, "bold"),
                                          bg=self.colors["card_bg"], fg=self.colors["text_primary"],
@@ -770,6 +912,170 @@ class ModernFinPulseApp:
         self.save_btn.pack(side="left", fill="x", expand=True, ipady=10)
 
         self.refresh_ui()
+
+    def scan_ai_receipt(self):
+        img_path = filedialog.askopenfilename(title="Upload Receipt Image for AI Vision Analysis", filetypes=[("Image Files", "*.png;*.jpg;*.jpeg")])
+        if not img_path:
+            return
+
+        try:
+            img = cv2.imread(img_path)
+            if img is None:
+                raise ValueError("Could not read image file.")
+            
+            h, w = img.shape[:2]
+            if w < 1000:
+                scale = 1000 / w
+                img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_CUBIC)
+
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            gray = cv2.bilateralFilter(gray, 9, 75, 75) 
+            gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+
+            extracted_text = pytesseract.image_to_string(gray, config='--psm 6')
+            
+            lines = [l.strip() for l in extracted_text.split('\n') if l.strip()]
+            merchant = "Retail Store Purchase"
+            amount = 450.0
+            category = "Other"
+
+            if lines:
+                for line in lines[:3]:
+                    if len(line) > 3 and not any(ch.isdigit() for ch in line[:3]):
+                        merchant = line[:35]
+                        break
+
+            all_numbers = []
+            num_matches = re.findall(r'(?:₹|Rs\.?|INR)?\s*([\d,]+\.?\d{0,2})', extracted_text, re.IGNORECASE)
+            for m in num_matches:
+                try:
+                    clean_m = m.replace(',', '').strip()
+                    if clean_m:
+                        val = float(clean_m)
+                        if 1 <= val <= 50000:
+                            all_numbers.append(val)
+                except ValueError:
+                    continue
+
+            amount_found = False
+            for line in lines:
+                line_up = line.upper()
+                if any(kw in line_up for kw in ["TOTAL", "AMOUNT", "PAID", "BALANCE", "SUM"]):
+                    line_nums = re.findall(r'([\d,]+\.?\d*)', line)
+                    for ln in line_nums:
+                        try:
+                            v = float(ln.replace(',', ''))
+                            if 1 <= v <= 50000:
+                                amount = v
+                                amount_found = True
+                                break
+                        except ValueError:
+                            continue
+                    if amount_found:
+                        break
+
+            if not amount_found and all_numbers:
+                amount = max(all_numbers)
+
+            text_upper = extracted_text.upper()
+            if any(k in text_upper for k in ["CAFE", "COFFEE", "RESTAURANT", "SWIGGY", "ZOMATO", "DINING", "FOOD", "STARBUCKS"]):
+                category = "Food & Dining"
+            elif any(k in text_upper for k in ["GROCERY", "SUPERMARKET", "MART", "BLINKIT", "ZEPTO", "FRESH", "STORE"]):
+                category = "Groceries"
+            elif any(k in text_upper for k in ["FUEL", "PETROL", "DIESEL", "UBER", "OLA", "CAB", "TRANSPORT", "PARKING"]):
+                category = "Transport"
+            elif any(k in text_upper for k in ["NETFLIX", "SPOTIFY", "PRIME", "SUBSCRIPTION"]):
+                category = "Subscription"
+            elif any(k in text_upper for k in ["BESCOM", "ELECTRICITY", "WATER", "UTILITY", "BILL", "AIRTEL", "JIO"]):
+                category = "Utility"
+
+            initial_data = {
+                "title": merchant,
+                "amount": amount,
+                "category": category,
+                "date": datetime.date.today().strftime("%Y-%m-%d")
+            }
+
+            dialog = ReceiptReviewDialog(self.root, initial_data, colors=self.colors)
+            self.root.wait_window(dialog)
+
+            if dialog.verified_data:
+                self.transactions.insert(0, dialog.verified_data)
+                self.save_data()
+                self.refresh_ui()
+                messagebox.showinfo("✅ Success", f"Verified & added transaction:\n• {dialog.verified_data['title']} (₹{dialog.verified_data['amount']:,.2f}) to SQLite database!")
+
+        except Exception as e:
+            messagebox.showerror("OCR Error", f"Tesseract processing failed.\n\nError: {e}")
+
+    def build_ai_copilot_page(self):
+        container = tk.LabelFrame(self.content_area, text=" 🤖 FinPulse AI Financial Copilot ", font=("Segoe UI", 12, "bold"),
+                                   bg=self.colors["card_bg"], fg=self.colors["accent_purple"], bd=1, relief="solid", highlightbackground=self.colors["card_border"])
+        container.pack(fill="both", expand=True, padx=5, pady=5)
+
+        tk.Label(container, text="Ask questions about your finances, spending habits, and subscriptions:", font=("Segoe UI", 11), fg=self.colors["text_secondary"], bg=self.colors["card_bg"]).pack(anchor="w", padx=20, pady=(15, 5))
+
+        chat_display_frame = tk.Frame(container, bg=self.colors["bg"], bd=1, relief="solid", highlightbackground=self.colors["card_border"])
+        chat_display_frame.pack(fill="both", expand=True, padx=20, pady=10)
+
+        scroll = ttk.Scrollbar(chat_display_frame)
+        scroll.pack(side="right", fill="y")
+
+        self.chat_text = tk.Text(chat_display_frame, font=("Segoe UI", 11), bg=self.colors["bg"], fg=self.colors["text_primary"], yscrollcommand=scroll.set, wrap="word", bd=0, padx=15, pady=15)
+        self.chat_text.pack(side="left", fill="both", expand=True)
+        scroll.config(command=self.chat_text.yview)
+        self.chat_text.config(state="disabled")
+
+        self.append_chat_message("FinPulse AI", "Hello! I am your AI Financial Copilot. I have analyzed your SQLite database. Ask me anything like:\n• 'How much did I spend this month?'\n• 'What are my active subscriptions?'\n• 'Can I afford a luxury purchase?'\n• 'Give me tips to save more money.'")
+
+        input_box = tk.Frame(container, bg=self.colors["card_bg"])
+        input_box.pack(fill="x", padx=20, pady=(5, 20))
+
+        self.ai_query_entry = tk.Entry(input_box, font=("Segoe UI", 11), bg=self.colors["input_bg"], fg=self.colors["text_primary"], insertbackground="white", bd=1, relief="solid")
+        self.ai_query_entry.pack(side="left", fill="x", expand=True, ipady=8, padx=(0, 10))
+        self.ai_query_entry.bind("<Return>", lambda e: self.ask_ai_copilot())
+
+        ask_btn = tk.Button(input_box, text="Ask Copilot 🚀", font=("Segoe UI", 11, "bold"), bg=self.colors["accent_purple"], fg="white", activebackground="#9333EA", bd=0, cursor="hand2", padx=20, command=self.ask_ai_copilot)
+        ask_btn.pack(side="right", ipady=8)
+
+    def append_chat_message(self, sender, message):
+        self.chat_text.config(state="normal")
+        tag = "ai" if sender == "FinPulse AI" else "user"
+        self.chat_text.insert("end", f"\n{sender}:\n{message}\n\n")
+        self.chat_text.config(state="disabled")
+        self.chat_text.see("end")
+
+    def ask_ai_copilot(self):
+        query = self.ai_query_entry.get().strip()
+        if not query:
+            return
+        self.append_chat_message("You", query)
+        self.ai_query_entry.delete(0, tk.END)
+
+        q_lower = query.lower()
+        curr_ym = datetime.date.today().strftime("%Y-%m")
+        inc, exp, net = self.calculate_monthly_finances(curr_ym)
+
+        response = ""
+        if "spend" in q_lower or "expense" in q_lower or "how much" in q_lower:
+            response = f"For this month ({curr_ym}), your total recorded expenses are ₹{exp:,.2f} across your accounts, against an income of ₹{inc:,.2f}. Your net monthly balance stands at ₹{net:,.2f}."
+        elif "subscription" in q_lower or "recurring" in q_lower:
+            subs = [t for t in self.transactions if t.get("category") == "Subscription"]
+            sub_total = sum(s.get("amount", 0) for s in subs)
+            response = f"You currently have {len(subs)} active subscription(s) totaling ₹{sub_total:,.2f}/month. Review them under the filtering tab to eliminate any redundant services!"
+        elif "afford" in q_lower or "buy" in q_lower or "budget" in q_lower:
+            budget_val = self.budgets.get(curr_ym, 0.0)
+            remaining = budget_val - exp if budget_val > 0 else 0
+            if budget_val > 0:
+                response = f"Your set monthly budget is ₹{budget_val:,.2f}. You have spent ₹{exp:,.2f}, leaving an available buffer of ₹{remaining:,.2f} for discretionary purchases."
+            else:
+                response = f"You haven't set a formal budget limit for this month yet. Your current net monthly cash flow is ₹{net:,.2f}."
+        elif "tip" in q_lower or "save" in q_lower or "advice" in q_lower:
+            response = "💡 AI Financial Tip: Pre-allocate your savings on payday before discretionary spending. Try keeping your committed monthly expenses under 50% of your total income to maintain a healthy emergency buffer."
+        else:
+            response = f"Based on your FinPulse database records, you have {len(self.transactions)} total transactions logged. Your current net balance for {curr_ym} is ₹{net:,.2f}. Is there anything specific you would like to analyze?"
+
+        self.append_chat_message("FinPulse AI", response)
 
     def build_visual_analytics_page(self):
         container = tk.Frame(self.content_area, bg=self.colors["bg"])
@@ -1350,7 +1656,6 @@ class ModernFinPulseApp:
             conn = sqlite3.connect(self.db_file)
             cursor = conn.cursor()
             
-            # Load transactions
             cursor.execute("""
                 SELECT type, date, title, category, amount, frequency, source, status, recurring, selected 
                 FROM transactions WHERE username = ?
@@ -1371,12 +1676,10 @@ class ModernFinPulseApp:
                     "selected": bool(r[9])
                 })
                 
-            # Load budgets
             cursor.execute("SELECT ym, amount FROM budgets WHERE username = ?", (self.current_user,))
             budget_rows = cursor.fetchall()
             self.budgets = {row[0]: row[1] for row in budget_rows}
             
-            # Load settings
             cursor.execute("SELECT auto_enabled, auto_day, last_exported_month FROM settings WHERE username = ?", (self.current_user,))
             setting_row = cursor.fetchone()
             if setting_row:
@@ -1399,7 +1702,6 @@ class ModernFinPulseApp:
             conn = sqlite3.connect(self.db_file)
             cursor = conn.cursor()
             
-            # Replace transactions for this user
             cursor.execute("DELETE FROM transactions WHERE username = ?", (self.current_user,))
             for t in self.transactions:
                 cursor.execute("""
@@ -1419,12 +1721,10 @@ class ModernFinPulseApp:
                     1 if t.get("selected", False) else 0
                 ))
                 
-            # Replace budgets for this user
             cursor.execute("DELETE FROM budgets WHERE username = ?", (self.current_user,))
             for ym, amt in self.budgets.items():
                 cursor.execute("INSERT INTO budgets (username, ym, amount) VALUES (?, ?, ?)", (self.current_user, ym, amt))
                 
-            # Upsert settings
             cursor.execute("DELETE FROM settings WHERE username = ?", (self.current_user,))
             cursor.execute("""
                 INSERT INTO settings (username, auto_enabled, auto_day, last_exported_month)
